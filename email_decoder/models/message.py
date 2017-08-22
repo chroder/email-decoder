@@ -9,6 +9,12 @@ class Message:
         :type str
         """
 
+        self.message_id = ""
+        """
+        The message ID
+        :type str
+        """
+
         self.from_addr = None
         """
         From address of the email. Note that technically there can be multiple froms. If your
@@ -50,6 +56,12 @@ class Message:
         """
         The date on the email itself (may be spoofed).
         :type datetime.datetime
+        """
+
+        self.references = []
+        """
+        List of message-ids this message references
+        :type list[string]
         """
 
         self.body_parts = []

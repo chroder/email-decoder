@@ -1,3 +1,4 @@
+import logging
 import sys
 import os.path
 from optparse import OptionParser
@@ -23,6 +24,10 @@ with open(file_path, 'r') as f:
 
 mimepart = mime.from_string(file_contents)
 
-parser = Parser()
+logger = logging.getLogger('email_decoder')
+logger.addHandler(logging.StreamHandler())
+logger.setLevel(logging.DEBUG)
+
+parser = Parser(logger)
 msg = parser.message_from_mimepart(mimepart)
 print message_to_json(msg)

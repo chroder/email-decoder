@@ -4,6 +4,8 @@ from datetime import datetime
 from email_decoder.models.message import Message
 from email_decoder.models.addr import Addr
 from flanker.mime.message.headers.encodedword import decode
+from ordered_set import OrderedSet
+import itertools
 from email_decoder.models.headers import Headers
 from email.utils import parsedate_tz
 from email.utils import mktime_tz
@@ -12,7 +14,7 @@ from email.utils import mktime_tz
 class Parser:
     def __init__(self, logger=None):
         if logger is None:
-            logger = logging.getLogger(__name__)
+            logger = logging.getLogger(__name__).addHandler(logging.NullHandler())
 
         self.logger = logger
 
@@ -22,12 +24,36 @@ class Parser:
         msg.headers = self.parsed_headers_from_raw_headers(msg.raw_headers)
         msg.subject = mimepart.subject
         msg.date = datetime.utcnow()
-        msg.message_date = msg.headers.get_header_value('Date') or None
+        msg.message_id = msg.headers.get_header_value('Message-ID') or None
         msg.from_addr = msg.headers.get_header_value('From') or None
         msg.to_addrs = msg.headers.get_header_values('To') or None
         msg.cc_addrs = msg.headers.get_header_values('CC') or None
         msg.bcc_addrs = msg.headers.get_header_values('BCC') or None
         msg.reply_to_addr = msg.headers.get_header_value('Reply-To') or None
+
+        # Read references
+        msg.references = parse_references_hval_list(list(itertools.chain.from_iterable([
+            msg.headers.get_header_values('In-Reply-To') or [],
+            msg.headers.get_header_values('References') or []
+        ])))
+
+        if msg.headers.has_header('Date'):
+            msg.message_date = msg.headers.get_header_value('Date') or None
+        elif msg.headers.has_header('Received'):
+            received_hval = msg.headers.get_header_value('Received')
+            try:
+                msg.message_date = parse_date_from_received_hval(received_hval)
+            except ValueError:
+                msg.message_date = None
+                self.logger.warning("Invalid date in %s header: %s", 'Received', received_hval,
+                                    {"tag": "invalid_date_header", "hname": "Received", "date_string": received_hval})
+
+        if msg.headers.has_header('MIME-Version'):
+            mime_version = msg.headers.get_header('MIME-Version').value.lower()
+            if not mime_version.startswith('1.0'):
+                self.logger.warning("Unexpected MIME-Version header: %s", mime_version,
+                                    {"tag": "unexpected_mime_version", "hname": "MIME-Version", "mime_version": mime_version})
+
         return msg
 
     def parsed_headers_from_raw_headers(self, raw_headers):
@@ -40,13 +66,15 @@ class Parser:
         :return email_decoder.models.headers.Headers
         """
         headers = Headers()
+        done_headers = set()
 
         for hname in Headers.ADDR_HEADERS:
+            done_headers.add(hname.lower())
             hs = raw_headers.get_headers(hname)
             if hs:
                 addresses = parse_address_hval_list([h.value for h in hs])
                 for name, email in addresses:
-                    addr = Addr(name, email)
+                    addr = Addr(email, name)
                     if addr.is_valid:
                         headers.add_header_value(hname, addr)
                     else:
@@ -54,6 +82,7 @@ class Parser:
                                             extra={"tag": "invalid_email_address", "hname": hname, "email_address": addr.email})
 
         for hname in Headers.DATE_HEADERS:
+            done_headers.add(hname.lower())
             hs = raw_headers.get_headers(hname)
             if hs:
                 for h in hs:
@@ -66,7 +95,7 @@ class Parser:
                                             {"tag": "invalid_date_header", "hname": hname, "date_string": h.value})
 
         for hname, hs in raw_headers.headers.iteritems():
-            if hname not in Headers.ADDR_HEADERS and hname not in Headers.DATE_HEADERS:
+            if hname.lower() not in done_headers:
                 for h in hs:
                     headers.add_header_value(hname, h.value)
 
@@ -76,6 +105,11 @@ class Parser:
             from_header.is_single = True
 
         return headers
+
+
+def parse_date_from_received_hval(received_hval):
+    dontcare, date_str = received_hval.split(';')
+    return parse_date_hval(date_str)
 
 
 def headers_from_mimepart(mimepart):
@@ -95,7 +129,7 @@ def headers_from_mimepart(mimepart):
 
 def parse_address_hval(hval):
     """
-    Given a list of strings containing email addresses, parse out the name/email pairs into a list of (name, email)
+    Given a address collection header value, parse out the name/email pairs into a list of (name, email)
 
     :param  string hval: Email address strings
     :return set[string, string]
@@ -117,7 +151,6 @@ def parse_address_hval_list(addr_hvals):
     addresses = set()
     for hval in addr_hvals:
         for elem in parse_address_hval(hval):
-            print elem
             addresses.add(elem)
 
     return sorted(elem for elem in addresses)
@@ -136,4 +169,16 @@ def parse_date_hval(hval):
 
     timestamp = mktime_tz(date_tuple)
     dt = datetime.utcfromtimestamp(timestamp)
+    dt.replace(microsecond=0)
     return dt
+
+
+def parse_references_hval(hval):
+    return hval.split()
+
+
+def parse_references_hval_list(references_hvals):
+    set = OrderedSet()
+    for hval in references_hvals:
+        set.update(parse_references_hval(hval))
+    return set.items

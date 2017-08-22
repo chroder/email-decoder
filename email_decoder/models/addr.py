@@ -1,7 +1,7 @@
 from flanker.addresslib import address
 
 
-class Addr:
+class Addr(object):
     """
     Represents an email address.
     """
