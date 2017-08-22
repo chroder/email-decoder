@@ -1,3 +1,4 @@
 flanker ~= 0.4
 msgpack-python ~= 0.4
 ordered-set ~= 2.0
+structlog ~= 17.2

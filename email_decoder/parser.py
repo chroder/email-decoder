@@ -1,20 +1,23 @@
 import logging
+import binascii
 import rfc822
 from datetime import datetime
 from email_decoder.models.message import Message
 from email_decoder.models.addr import Addr
 from flanker.mime.message.headers.encodedword import decode
+from flanker import mime
 from ordered_set import OrderedSet
 import itertools
 from email_decoder.models.headers import Headers
 from email.utils import parsedate_tz
 from email.utils import mktime_tz
+import structlog
 
 
 class Parser:
     def __init__(self, logger=None):
         if logger is None:
-            logger = logging.getLogger(__name__).addHandler(logging.NullHandler())
+            logger = structlog.get_logger()
 
         self.logger = logger
 
@@ -45,14 +48,20 @@ class Parser:
                 msg.message_date = parse_date_from_received_hval(received_hval)
             except ValueError:
                 msg.message_date = None
-                self.logger.warning("Invalid date in %s header: %s", 'Received', received_hval,
-                                    {"tag": "invalid_date_header", "hname": "Received", "date_string": received_hval})
+                self.logger.warning("Failed to parse date", tag="invalid_date_header", hname="Received", date_string=received_hval)
 
         if msg.headers.has_header('MIME-Version'):
             mime_version = msg.headers.get_header('MIME-Version').value.lower()
             if not mime_version.startswith('1.0'):
-                self.logger.warning("Unexpected MIME-Version header: %s", mime_version,
-                                    {"tag": "unexpected_mime_version", "hname": "MIME-Version", "mime_version": mime_version})
+                self.logger.warning("Unexpected MIME-Version", tag=unexpected_mime_version, hname="MIME-Version", mime_version=mime_version)
+
+        state = ParserState()
+        self._walk_parts(state, mimepart)
+
+        if state.html_parts:
+            msg.body_html = ''.join(state.html_parts)
+        if state.text_parts:
+            msg.body_text = '\n'.join(state.text_parts)
 
         return msg
 
@@ -78,8 +87,7 @@ class Parser:
                     if addr.is_valid:
                         headers.add_header_value(hname, addr)
                     else:
-                        self.logger.warning("Invalid email address in %s header: %s", hname, addr.email,
-                                            extra={"tag": "invalid_email_address", "hname": hname, "email_address": addr.email})
+                        self.logger.warning("Invalid email address", tag=invalid_email_address, hname=hname, email_address=addr.email)
 
         for hname in Headers.DATE_HEADERS:
             done_headers.add(hname.lower())
@@ -91,8 +99,7 @@ class Parser:
                         headers.add_header_value(hname, date, is_single=True)
                         break  # we only want a single date value
                     except ValueError:
-                        self.logger.warning("Invalid date in %s header: %s", hname, h.value,
-                                            {"tag": "invalid_date_header", "hname": hname, "date_string": h.value})
+                        self.logger.warning("Could not parse date", tag="invalid_date_header", hname=hname, date_string=h.value)
 
         for hname, hs in raw_headers.headers.iteritems():
             if hname.lower() not in done_headers:
@@ -105,6 +112,74 @@ class Parser:
             from_header.is_single = True
 
         return headers
+
+    def _walk_parts(self, state, mimepart):
+        for part in mimepart.walk(with_self=mimepart.content_type.is_singlepart()):
+            try:
+                if part.content_type.is_multipart():
+                    continue
+                self._parse_parts(state, part)
+            except (mime.DecodingError, AttributeError, RuntimeError, TypeError, binascii.Error, UnicodeDecodeError) as e:
+                self.logger.error('Error parsing message MIME parts', error=e)
+                state.mark_error()
+
+    def _parse_parts(self, state, mimepart):
+        disposition, _ = mimepart.content_disposition
+        content_id = mimepart.headers.get('Content-Id')
+        content_type, params = mimepart.content_type
+
+        filename = mimepart.detected_file_name
+        if filename == '':
+            filename = None
+
+        data = mimepart.body
+
+        is_text = content_type.startswith('text')
+        if disposition not in (None, 'inline', 'attachment'):
+            self.logger.error('Unknown Content-Disposition',  bad_content_disposition=mimepart.content_disposition)
+            state.mark_error()
+            return
+
+        if disposition == 'attachment':
+            self._save_attachment(state, data, disposition, content_type, filename, content_id)
+            return
+
+        if disposition == 'inline' and not (is_text and filename is None and content_id is None):
+            # the extra logic above is to catch edge-cases where the mailer
+            # sets Content-Disposition: on text body parts. These arent attachments, they're body parts
+            self._save_attachment(state, data, disposition, content_type, filename, content_id)
+            return
+
+        if is_text:
+            if data is None:
+                return
+            normalized_data = data.encode('utf-8', 'strict')
+            normalized_data = normalized_data.replace('\r\n', '\n').replace('\r', '\n')
+            if content_type == 'text/html':
+                state.html_parts.append(normalized_data)
+            elif content_type == 'text/plain':
+                state.text_parts.append(normalized_data)
+            else:
+                self.logger.info('Saving other text MIME part as attachment', content_type=content_type)
+                self._save_attachment(state, data, 'attachment', content_type, filename, content_id)
+            return
+
+        # Finally, if we get a non-text MIME part without Content-Disposition,
+        # treat it as an attachment.
+        self._save_attachment(state, data, 'attachment', content_type, filename, content_id)
+
+    def _save_attachment(self, state, data, disposition, content_type, filename, content_id):
+        pass
+
+
+class ParserState:
+    def __init__(self):
+        self.html_parts = []
+        self.text_parts = []
+        self.is_error = False
+
+    def mark_error(self):
+        self.is_error = True
 
 
 def parse_date_from_received_hval(received_hval):

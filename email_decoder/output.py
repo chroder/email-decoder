@@ -3,7 +3,6 @@ import msgpack
 from datetime import datetime
 from email_decoder.models.message import Message
 from email_decoder.models.headers import Headers
-from email_decoder.models.body import Body
 from email_decoder.models.addr import Addr
 from flanker.mime.message.headers.wrappers import ContentType
 from flanker.mime.message.headers.wrappers import WithParams
@@ -22,7 +21,8 @@ def object_to_dict(obj, opts=None):
         res['bcc_addrs'] = object_to_dict(obj.bcc_addrs) if obj.bcc_addrs else None
         res['date'] = obj.date.isoformat(' ') if obj.date else None
         res['message_date'] = obj.message_date.isoformat(' ') if obj.message_date else None
-        res['body_parts'] = [object_to_dict(p) for p in obj.body_parts]
+        res['body_html'] = object_to_dict(obj.body_html)
+        res['body_text'] = object_to_dict(obj.body_text)
         res['headers'] = object_to_dict(obj.headers)
         res['raw_headers'] = object_to_dict(obj.raw_headers, {"raw_names": True})
         return res
@@ -39,9 +39,6 @@ def object_to_dict(obj, opts=None):
 
     if isinstance(obj, datetime):
         return obj.isoformat(' ')
-
-    if isinstance(obj, Body):
-        return {"type": obj.type, "content": obj.content}
 
     if isinstance(obj, Addr):
         return {"name": obj.name, "email": obj.email}

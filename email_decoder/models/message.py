@@ -64,10 +64,16 @@ class Message:
         :type list[string]
         """
 
-        self.body_parts = []
+        self.body_text = None
         """
-        Body parts we've detected are the message contents. Can be multiple (e.g. a text and an html part).
-        :type list[body]
+        Text body, if available.
+        :type str | None
+        """
+
+        self.body_html = None
+        """
+        HTML body, if available.
+        :type str | None
         """
 
         self.files = []
