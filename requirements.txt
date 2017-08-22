@@ -1,0 +1,2 @@
+flanker ~= 0.4
+msgpack-python ~= 0.4
