@@ -23,3 +23,15 @@ class File:
         The type of the file (https://en.wikipedia.org/wiki/Internet_media_type)
         :type str
         """
+
+        self.data = None
+        """
+        The actual file contents, or more commonly, a reference to where to find the file.
+        :type str
+        """
+
+        self.is_inline = False
+        """
+        True if the file has inline disposition
+        :type bool
+        """

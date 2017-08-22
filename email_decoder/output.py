@@ -4,12 +4,12 @@ from datetime import datetime
 from email_decoder.models.message import Message
 from email_decoder.models.headers import Headers
 from email_decoder.models.addr import Addr
+from email_decoder.models.file import File
 from flanker.mime.message.headers.wrappers import ContentType
 from flanker.mime.message.headers.wrappers import WithParams
-from flanker.mime.message.headers.wrappers import MessageId
 
 
-def object_to_dict(obj, opts=None):
+def object_to_dict(obj):
     if isinstance(obj, Message):
         res = dict()
         res['subject'] = obj.subject
@@ -24,7 +24,8 @@ def object_to_dict(obj, opts=None):
         res['body_html'] = object_to_dict(obj.body_html)
         res['body_text'] = object_to_dict(obj.body_text)
         res['headers'] = object_to_dict(obj.headers)
-        res['raw_headers'] = object_to_dict(obj.raw_headers, {"raw_names": True})
+        res['raw_headers'] = object_to_dict(obj.raw_headers)
+        res['files'] = object_to_dict(obj.files)
         return res
 
     if isinstance(obj, Headers):
@@ -42,6 +43,9 @@ def object_to_dict(obj, opts=None):
 
     if isinstance(obj, Addr):
         return {"name": obj.name, "email": obj.email}
+
+    if isinstance(obj, File):
+        return obj.__dict__
 
     if isinstance(obj, ContentType):
         return {"content_type": obj.__str__(), "main_type": obj.main, "sub_type": obj.sub, "params": obj.params}
@@ -62,3 +66,37 @@ def message_to_json(message):
 def message_to_msgpack(message):
     return msgpack.packb(object_to_dict(message))
 
+
+def addr_to_str(addr):
+    if addr.name:
+        return "%s <%s>" % (addr.name, addr.email)
+    else:
+        return addr.email
+
+
+def message_to_debug_out(message):
+    print("%-10s %s" % ("Subject:", message.subject))
+    print("%-10s %s" % ("From:", addr_to_str(message.from_addr)))
+    if message.to_addrs:
+        print("%-10s %s" % ("To:", ', '.join([addr_to_str(a) for a in message.to_addrs])))
+    if message.cc_addrs:
+        print("%-10s %s" % ("CC:", ', '.join([addr_to_str(a) for a in message.cc_addrs])))
+
+    if message.body_html:
+        print('\n')
+        print(message.body_html)
+
+    if message.body_html and message.body_text:
+        print("\n\n")
+        print("-" * 78)
+        print("\n\n")
+
+    if message.body_text:
+        print('\n')
+        print(message.body_text)
+
+    if message.files:
+        print('\n')
+        print("Attachments:")
+        for f in message.files:
+            print("  * %s (%s bytes) -- %s" % (f.filename, f.size, f.content_type))

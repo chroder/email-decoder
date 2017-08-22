@@ -1,9 +1,11 @@
-import logging
+import mimetypes
 import binascii
 import rfc822
+import uuid
 from datetime import datetime
 from email_decoder.models.message import Message
 from email_decoder.models.addr import Addr
+from email_decoder.models.file import File
 from flanker.mime.message.headers.encodedword import decode
 from flanker import mime
 from ordered_set import OrderedSet
@@ -15,11 +17,17 @@ import structlog
 
 
 class Parser:
-    def __init__(self, logger=None):
+    def __init__(self, logger=None, filestore=None):
         if logger is None:
             logger = structlog.get_logger()
 
         self.logger = logger
+
+        if filestore is None:
+            def filestore(f):
+                return "<no store>"
+
+        self.filestore = filestore
 
     def message_from_mimepart(self, mimepart):
         msg = Message()
@@ -62,6 +70,9 @@ class Parser:
             msg.body_html = ''.join(state.html_parts)
         if state.text_parts:
             msg.body_text = '\n'.join(state.text_parts)
+        if state.attachments:
+            for f in state.attachments:
+                msg.files.append(f)
 
         return msg
 
@@ -169,13 +180,27 @@ class Parser:
         self._save_attachment(state, data, 'attachment', content_type, filename, content_id)
 
     def _save_attachment(self, state, data, disposition, content_type, filename, content_id):
-        pass
+        if filename is None:
+            mimetypes.init()
+            ext = mimetypes.guess_extension(content_type) or ""
+            filename = str(uuid.uuid4()) + ext
+
+        f = File()
+        f.content_id = content_id
+        f.filename = filename
+        f.size = len(data)
+        f.content_type = content_type
+        f.is_inline = disposition == "inline"
+        f.data = self.filestore(data)
+
+        state.attachments.append(f)
 
 
 class ParserState:
     def __init__(self):
         self.html_parts = []
         self.text_parts = []
+        self.attachments = []
         self.is_error = False
 
     def mark_error(self):
